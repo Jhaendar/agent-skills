@@ -29,6 +29,14 @@ MoveMessage(req: { id: string; destinationParent: string }): Message;
 
 Bulk standard methods operating atomically in a single HTTP round-trip:
 
+```http
+GET /v1/chatRooms:batchGet?ids=chatRooms/a&ids=chatRooms/b
+GET /v1/chatRooms/-/messages:batchGet?ids=chatRooms/1/messages/x&ids=chatRooms/2/messages/y
+
+POST /v1/chatRooms:batchDelete
+{ "ids": ["chatRooms/a", "chatRooms/b"] }
+```
+
 ```ts
 @post("/chatRooms:batchCreate")
 BatchCreateChatRooms(req: { requests: CreateChatRoomRequest[] }): { resources: ChatRoom[] };
@@ -48,10 +56,10 @@ BatchDeleteChatRooms(req: { parent?: string; ids: string[] }): void;
 ```
 
 ### Strict Rules
-- **HTTP Verbs:** `batchGet` uses `GET` (note: if `ids` exceeds URL length limits in practice, some APIs expose `POST ...:batchGet`, though the book prescribes `GET`). `batchCreate`, `batchUpdate`, and `batchDelete` all use **`POST`** (never `PATCH` or `DELETE`!).
+- **HTTP Verbs:** `batchGet` uses `GET` (if many IDs risk exceeding URL length limits in practice, a `POST ...:batchGet` fallback may be needed, though the book prescribes `GET`). `batchCreate`, `batchUpdate`, and `batchDelete` all use **`POST`** (never `PATCH` or `DELETE`!).
 - **100% Atomicity:** All items in the batch succeed, or the entire batch fails and rolls back (single HTTP error). Never return mixed partial-success arrays from `Batch*`—use an LRO or `:import` if partial progress is needed.
 - **Exact Ordering:** Output `resources[]` **must match the exact order** of input `requests[]` / `ids[]`.
-- **Hoisted Common Fields:** Allow shared fields (`parent`, `fieldMask`) on the outer batch request; if targeting resources across different parents in one call, use a **wildcard hyphen** parent: `GET /chatRooms/-/messages:batchGet?ids=...`.
+- **Hoisted Common Fields:** Allow shared fields (`parent`, `fieldMask`) on the outer batch request; if targeting resources across different parents in one call, use a **wildcard hyphen** parent (`chatRooms/-/messages:batchGet`).
 - **Bounds:** Enforce a reasonable max batch size (e.g., 100–1,000 items).
 
 ---
@@ -107,6 +115,18 @@ interface ListChatRoomsResponse { results: ChatRoom[]; nextPageToken?: string; }
 ```
 1. **Name it `maxPageSize`, never `pageSize`:** It is an **upper bound**, not an exact count. The server may return fewer items (even `0` items) per page due to filtering, permissions, or byte/time budgets. Apply a sensible server default when omitted and clamp excessive values.
 2. **Termination Condition:** Stop paging **ONLY when `nextPageToken` is empty, `null`, or omitted**. **NEVER** stop because `results.length === 0` or `results.length < maxPageSize`!
+```ts
+// ❌ BAD: Drops remaining pages whenever filtering/auth leaves a partial or empty page
+do { page = await list({ maxPageSize: 50, pageToken }); } while (page.results.length === 50);
+
+// ✅ GOOD: Keep paging until nextPageToken is absent/empty
+let pageToken: string | undefined;
+do {
+  const page = await list({ maxPageSize: 50, pageToken });
+  all.push(...page.results);
+  pageToken = page.nextPageToken || undefined;
+} while (pageToken);
+```
 3. **Opaque Cursor `pageToken`:** Encode/encrypt cursor state (e.g., Base64 opaque token)—never expose raw SQL `OFFSET`/`LIMIT` or internal row IDs directly.
 4. **Avoid exact `totalCount`:** Computing exact totals on huge/filtered sets hurts scalability; omit it or document it as an estimate only if needed.
 
@@ -158,3 +178,9 @@ ImportMessages(req: {
 
 - **Orthogonal configs:** Separate *where bytes live* (`DataSource`/`DataDestination`) from *how bytes convert to resources* (`InputConfig`/`OutputConfig`).
 - **Scope & Consistency:** Limit each `:import`/`:export` to a **single resource type**, return an LRO, clarify whether exports are point-in-time snapshots or subject to concurrent edits, and document ID collision handling on import (default: generate fresh IDs on import rather than trusting external IDs).
+
+---
+
+## Industry Supplement (>90% Confidence)
+
+- **Sorting (`orderBy: string`):** When `List` supports custom sort orders, use a comma-separated string field (`orderBy="createTime desc, priority asc"`, matching Google AIP-132), validate field names strictly (`400 Bad Request` on unknown fields), append a deterministic tie-breaker (`id asc`), and bind `(filter, orderBy)` into the `pageToken` (rejecting mismatched reuse across pages).

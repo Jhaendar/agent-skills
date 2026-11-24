@@ -31,6 +31,28 @@ Covers naming, resource scope and hierarchy, and data types/defaults.
   - Better for composite values: instead of `dimensionsPixels: "1024x768"`, define `{ lengthPixels: number; widthPixels: number }`.
   - Distinguish binary vs. decimal prefixes explicitly (`sizeGb` vs. `sizeGib`).
 
+```ts
+// ❌ BAD: Prepositions, unitless numbers, negative boolean, numeric ID & float money, rigid enum
+interface OrderBad {
+  orderId: number;
+  size: number;
+  timeout: number;
+  totalPrice: number;
+  disallowExpress: boolean;
+  status: 1 | 2 | 3; // or closed enum
+}
+
+// ✅ GOOD: String ID, explicit units, string decimal, positive boolean, documented string state
+interface OrderGood {
+  id: string;                 // "orders/ahm6a83henmp~"
+  weightGrams: number;
+  timeoutSeconds: number;
+  totalPriceUsd: string;      // "19.99" (or { amount: "19.99", currencyCode: "USD" })
+  allowExpress: boolean;
+  status: string;             // Server-validated: "pending" | "paid" | "shipped"
+}
+```
+
 ---
 
 ## Chapter 4: Resource Scope and Hierarchy
@@ -78,7 +100,7 @@ Serialization formats vary: JSON supports `null` and omitted keys (`undefined`),
 - **Never use numeric types for IDs** (you don't do arithmetic on IDs; use strings).
 - **Always document bounds** (`min`, `max`, bit width); internally prefer signed 64-bit integers (`int64`) for whole numbers unless a smaller bound is guaranteed.
 - **Never use `0` as a sentinel for "use default"** when `0` is a valid domain value.
-- **JSON precision trap (IEEE-754):** JavaScript `Number` loses integer precision above $2^{53} - 1$ (`9007199254740991`) and suffers binary float rounding (`0.1 + 0.2 === 0.30000000000000004`).
+- **JSON precision trap (IEEE-754):** JavaScript `Number` loses integer precision above 2^53 - 1 (`9,007,199,254,740,991`) and suffers binary float rounding (`0.1 + 0.2 === 0.30000000000000004`).
   - **Rule:** Serialize 64-bit integers and arbitrary-precision decimals / currency amounts as **strings** (`"0.1"`, `"9999999999999999999"`), never raw JSON numbers.
 
 ### Strings

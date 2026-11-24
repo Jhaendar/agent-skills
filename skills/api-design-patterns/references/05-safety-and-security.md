@@ -41,7 +41,7 @@ interface ChatRoom {
 | :--- | :--- | :--- |
 | **Get** | `GET /{id=chatRooms/*}` | **Still returns the soft-deleted resource** (caller has the ID and needs to see `deleted: true` / `expireTime`). |
 | **List** | `GET /chatRooms` | **Excludes** soft-deleted resources by default. Add `includeDeleted?: boolean` on `ListRequest` (applied *before* `filter`, e.g. `includeDeleted=true&filter=deleted: true`). |
-| **Update** | `PATCH /{resource.id=chatRooms/*}` | `deleted` is **output-only**—manual attempts to set `deleted` in `PATCH` are ignored without error. |
+| **Update** | `PATCH /{resource.id=chatRooms/*}` | `deleted` is **output-only**—manual attempts to set `deleted` in `PATCH` are ignored without error. *(Reject other mutations on already soft-deleted resources with `412 Precondition Failed` unless restored via `:undelete` first.)* |
 | **Delete** | `DELETE /{id=chatRooms/*}` | Sets `deleted = true`, sets `expireTime` (e.g., now + 30d), and **returns the modified `Resource`** (not `void`!). Calling `Delete` on an already soft-deleted resource returns **`412 Precondition Failed`**. |
 | **Undelete** | `POST /{id=chatRooms/*}:undelete` | Sets `deleted = false`, clears `expireTime = null`, returns `Resource`. Calling `:undelete` on a non-deleted resource returns **`412 Precondition Failed`**. |
 | **Expunge** | `POST /{id=chatRooms/*}:expunge` | Permanently deletes and returns `void`. Allowed on **any** resource (whether soft-deleted or active). |
@@ -107,7 +107,7 @@ interface Message {
 - **Creation:** Either **implicit** (every `PATCH` creates a new revision) or **explicit** (`POST /{id=chatRooms/*/messages/*}:createRevision`).
 - **List revisions:** `GET /{id=chatRooms/*/messages/*}:listRevisions` (paginated).
 - **Restore revision:** `POST /{id=chatRooms/*/messages/*}:restoreRevision` (`{ id, revisionId }`) **creates a new head revision** whose contents equal the target snapshot—**never rewrite or erase history**.
-- **Delete revision:** `DELETE /{id=chatRooms/*/messages/*}:deleteRevision` (or `@rev:deleteRevision`; disallow deleting the active head revision).
+- **Delete revision:** `DELETE /{id=chatRooms/*/messages/*@*}:deleteRevision` (e.g. `DELETE /chatRooms/1/messages/2@a8f9c2:deleteRevision`; disallow deleting the active head revision).
 
 ---
 
@@ -120,6 +120,15 @@ interface Message {
 | `502 Bad Gateway`, `503 Service Unavailable`, `504 Gateway Timeout` | **Yes** | Transient upstream/overload failure. |
 | `500 Internal Server Error` | **Conditional** | Retry **only** if method is idempotent or carries `requestId` / `Idempotency-Key`. |
 | `400`, `401`, `403`, `404`, `409`, `412`, `422` | **NO** | Client error or precondition mismatch; retrying won't fix it. |
+
+```ts
+// ❌ BAD: Retrying a non-idempotent POST on 504/500 without a deduplication key causes duplicate charges/resources
+await retry(() => api.post("/payments", { amountUsd: "25.00" }));
+
+// ✅ GOOD: Attach a stable requestId / Idempotency-Key before the retry loop starts
+const idempotencyKey = crypto.randomUUID();
+await retry(() => api.post("/payments", { amountUsd: "25.00" }, { headers: { "Idempotency-Key": idempotencyKey } }));
+```
 
 ### Exponential Backoff + Jitter
 - Double delay per attempt (`1s → 2s → 4s → 8s...`), clamped by `maxDelayMs` (e.g., `32s`) and bounded by `maxRetries` (e.g., `10`).

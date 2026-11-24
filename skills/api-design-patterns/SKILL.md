@@ -1,73 +1,101 @@
 ---
 name: api-design-patterns
 description: >-
-  Design, review, refactor, and audit resource-oriented web APIs (REST/HTTP,
-  JSON, OpenAPI, gRPC/HTTP transcoding) using the patterns and rules from JJ
-  Geewax's API Design Patterns. Use whenever the user designs API endpoints,
-  schemas, resource hierarchies, naming, identifiers, standard or custom
-  methods, field masks, long-running operations, rerunnable jobs, resource
-  relationships, batch operations, pagination, filtering, import/export,
-  versioning, soft deletion, request deduplication, dry-run validation,
-  revisions, retries, or request authentication.
+  Design, review, refactor, and audit resource-oriented HTTP/REST/JSON web APIs,
+  OpenAPI/Swagger specs, Protobuf HTTP transcoding, and backend route
+  handlers/DTOs using JJ Geewax's API Design Patterns. Trigger for: designing or
+  reviewing REST endpoints, URL/resource hierarchies, OpenAPI schemas, standard
+  or :custom methods, partial PATCH field masks, cursor pagination, filter DSLs,
+  batch endpoints, async long-running operations, rerunnable jobs, soft
+  deletion, idempotency/deduplication keys, dry-run validation, revisions, retry
+  policies, or HTTP request signatures. DO NOT trigger for: GraphQL-only
+  schemas, internal in-process library/SDK functions, frontend UI table
+  pagination, or raw SQL authoring.
 ---
 
 # API Design Patterns
 
-Resource-oriented architectural blueprint distilled from JJ Geewax's *API Design Patterns* (Manning), with clearly labeled industry supplements where modern standards extend the book.
-
-## Core Philosophy (Part 1, Ch 1–2)
-
-A good web API is **Operational** (actually solves the user's goal reliably), **Expressive** (clearly communicates intent), **Simple** (minimal surface area and cognitive load), and **Predictable** (consistent rules across every endpoint so users can transfer knowledge).
-
-**Resource-Oriented Architecture:** Model the system around a focused set of **resources** (nouns) manipulated primarily through a small, uniform set of **standard methods** (`Create`, `Get`, `List`, `Update`, `Delete`, and optionally `Replace`). Reach for **custom methods** (`POST /resources/123:action`) only when an operation has side effects or semantics that cannot fit a standard method cleanly. Favor global predictability over clever, one-off endpoint optimizations.
+Operational playbook distilled from JJ Geewax's *API Design Patterns* (Manning), with clearly labeled >90%-confidence industry supplements. Goal: maximize **Operational** utility, **Expressiveness**, **Simplicity**, and **Predictability** by keeping actions constrained to uniform standard methods over clean resource models.
 
 ---
 
-## Agent Workflows
+## 1. Greenfield vs. Brownfield Precedence
 
-### 1. Designing a New API
-1. **Model Resources & Hierarchy** — Identify core nouns, decide what is a standalone resource vs. an inline data type, and keep parent-child nesting shallow (≤ 2–3 levels, only for true ownership/cascading ACLs & deletes). Read [01-design-principles.md](./references/01-design-principles.md) and [03-resource-relationships.md](./references/03-resource-relationships.md).
-2. **Name Fields & Choose Data Types** — Apply consistent casing, imperative verbs, positive booleans, explicit units on primitives, string-serialized 64-bit ints/decimals, open strings over rigid enums, and bounded atomic lists/maps. Read [01-design-principles.md](./references/01-design-principles.md).
-3. **Design Identifiers & Standard Methods** — Use hierarchical resource names (`parents/abc/children/xyz`), Crockford Base32 + Base37 checksum IDs, standard HTTP verbs, `FieldMask`, and `:customAction` methods for side effects or async LROs/jobs. Read [02-fundamentals.md](./references/02-fundamentals.md).
-4. **Add Collective Operations** — Add cursor pagination (`maxPageSize` / `pageToken`), hermetic `filter` strings, atomic `Batch*`, `:copy`/`:move`, dry-run `:purge`, `:write`, or `:import`/`:export` where needed. Read [04-collective-operations.md](./references/04-collective-operations.md).
-5. **Harden Safety & Security** — Define versioning/compatibility policy, soft deletion (`deleted` + `expireTime` + `:undelete`/`:expunge`), `requestId` deduplication, `validateOnly` dry-runs, revisions (`@rev`), exponential-backoff + jitter retries, and request auth. Read [05-safety-and-security.md](./references/05-safety-and-security.md).
+**Predictability across the whole API overrides textbook purity on a single endpoint.**
 
-### 2. Reviewing / Auditing an Existing API
-When asked to review an OpenAPI spec, router, TypeScript/Proto schema, or endpoint list:
-1. Load the relevant reference file(s) from the routing table below.
-2. Audit top-down and report findings grouped by severity:
-   - **Safety & Compatibility Risks** (non-atomic batches, missing `requestId` on retries, unsafe `purge`, breaking enum/default changes, covert side effects on `PATCH`/`GET`).
-   - **Structural & Hierarchy Smells** (deep nesting > 3 levels, resources-for-everything, unbounded inline arrays, missing association resources vs. leaky `add`/`remove`, singleton sub-resource mistakes).
-   - **Naming & Type Pitfalls** (prepositions in resource/method names, missing units on numbers, floats for money, rigid schema enums, negative booleans, sequential numeric IDs).
-   - **Operational Gaps** (offset pagination vs. opaque tokens, stopping on empty `results` instead of empty `nextPageToken`, missing `FieldMask`, missing `Operation<ResultT, MetadataT>` on slow calls).
-3. Provide concrete before/after interface or HTTP definitions for each finding.
+- **Brownfield (existing API/repo):** Match the codebase's established *surface conventions* (`snake_case` vs. `camelCase`, UUID vs. Base32 IDs, auth headers, error envelope, URL version prefix) unless the user asks for a v2 redesign. **Always** enforce *behavioral and safety invariants* (atomic batches, cursor termination, dry-run purge, no covert side effects on `GET`/`PATCH`, string decimals/money, non-retriable `4xx` rules).
+- **Greenfield (new API or v2 redesign):** Apply all book conventions by default.
 
 ---
 
-## High-Signal Book Rules (Quick Audit Checklist)
+## 2. Selective Progressive Disclosure (Load Only What You Need)
 
-- **Standard `DELETE` is NOT idempotent:** First call deletes (`200`/`204`), second returns `404 Not Found` (hard delete) or `412 Precondition Failed` (soft delete). Distinguish *this request deleted it* from *it is absent*.
-- **No covert side effects on standard methods:** Never trigger emails, deployments, or state-machine transitions via `PATCH` (`{ status: "sent" }`). Use a `POST` custom method (`POST /emails/123:send`).
-- **Custom methods use `POST` + colon syntax (`:verb`), never `PATCH`:** Only use `GET` for strictly read-only, safe, idempotent custom actions (e.g., `:wait`, `:read`, `:listRevisions`).
-- **IDs are hierarchical strings with checksums:** `id` holds the relative resource path (`"chatRooms/ahm6a83henmp~/messages/..."`), encoded in Crockford Base32 + Base37 checksum char so `400` (bad checksum) is distinguishable from `404` (missing).
-- **Pagination stops on empty `nextPageToken`, NOT empty `results`:** Use `maxPageSize` (never `pageSize`), treat `results: []` + non-empty `nextPageToken` as "keep paging", and keep `pageToken` opaque.
-- **No floating-point or >53-bit integers in JSON numbers:** Serialize 64-bit IDs/integers and fixed-point decimals/money as **strings** (or structured currency objects).
-- **Prefer documented strings over schema enums:** Closed enums break existing clients when servers add new values.
-- **Lists are atomic; no array-index addressing:** Never support `items[0]` in `FieldMask` or `filter` strings. Use `*` only for field projection (`administrators.*.name`) on `GET`, and replace lists atomically (or promote to a sub-collection / map).
-- **Batch operations (`:batchCreate`, `:batchGet`, `:batchUpdate`, `:batchDelete`) are 100% atomic:** All succeed or all fail, returning results in exact request order. For partial failures, use LROs or `:import`/`:export`.
-- **Criteria-based `:purge` defaults to dry-run (`force: false`):** Never execute bulk criteria deletion unless `force: true` is explicitly passed; always return `purgeCount` and `purgeSample`.
-- **Cross-references (`*Id`) do not require strict DB referential integrity by default:** Prefer `*Id` string fields over unbounded inline arrays, and accept dangling references unless business integrity strictly requires blocking deletion.
+Read **only** the 1–2 reference files relevant to the current task—never load all 5 for a narrow endpoint change:
 
----
-
-## Pattern Routing Table
-
-Read the matching reference file(s) before finalizing designs or code reviews:
-
-| If the task involves... | Read | Chapters |
+| Task / Topic | Reference File | Chapters |
 | :--- | :--- | :--- |
-| Naming, casing, grammar, prepositions, units, resource scope vs. inline data types, hierarchy depth, `null` vs. omitted, booleans, numbers/floats, UTF-8 NFC strings, enums, lists, maps | [01-design-principles.md](./references/01-design-principles.md) | Ch 3–5 |
-| Resource IDs, Crockford Base32, checksums, UUIDs, tombstoning, `Create`/`Get`/`List`/`Update`/`Delete`/`Replace`, `FieldMask`, custom `:methods`, LROs (`Operation`), rerunnable `Job`/`Execution` | [02-fundamentals.md](./references/02-fundamentals.md) | Ch 6–11 |
-| Singleton sub-resources (`/location`), cross-references (`authorId`), many-to-many association resources (`Membership`), `:add`/`:remove` custom methods, polymorphic resources (`type` discriminator) | [03-resource-relationships.md](./references/03-resource-relationships.md) | Ch 12–16 |
-| `:copy` & `:move`, atomic `:batch*` operations, `:purge` (criteria deletion), anonymous `:write` telemetry, cursor pagination (`maxPageSize` / `pageToken` / `:read`), `filter` string DSL, `:import` & `:export` | [04-collective-operations.md](./references/04-collective-operations.md) | Ch 17–23 |
-| Backward compatibility, versioning strategies, soft delete (`deleted`, `expireTime`, `:undelete`, `:expunge`), `requestId` deduplication, `validateOnly` dry-runs, `@revision` snapshots, retries + backoff/jitter, HTTP request signing | [05-safety-and-security.md](./references/05-safety-and-security.md) | Ch 24–30 |
+| Naming, units, hierarchy depth, inline vs. resource, `null` vs. omitted, booleans, numbers/money, UTF-8 NFC, enums, lists/maps | [01-design-principles.md](./references/01-design-principles.md) | Ch 3–5 |
+| Base32/checksum IDs, `Create`/`Get`/`List`/`Update`/`Delete`/`Replace`, `FieldMask`, `:customMethod`, LRO `Operation`, `Job`/`Execution`, ETag/If-Match | [02-fundamentals.md](./references/02-fundamentals.md) | Ch 6–11 |
+| Singleton sub-resources, cross-references (`*Id`), M:N `Membership` vs. `:add`/`:remove`, polymorphic `type` resources | [03-resource-relationships.md](./references/03-resource-relationships.md) | Ch 12–16 |
+| `:copy`/`:move`, atomic `:batch*`, dry-run `:purge`, `:write` telemetry, cursor pagination (`maxPageSize`/`pageToken`/`:read`), `filter` DSL, `orderBy`, `:import`/`:export` | [04-collective-operations.md](./references/04-collective-operations.md) | Ch 17–23 |
+| Compatibility & versioning, soft deletion (`deleted`/`expireTime`/`:undelete`/`:expunge`), `requestId` deduplication, `validateOnly`, `@rev`, backoff+jitter retries, request signing | [05-safety-and-security.md](./references/05-safety-and-security.md) | Ch 24–30 |
+
+---
+
+## 3. HTTP Wire-Binding Rules (Pseudo-TS → Real HTTP)
+
+Book listings use abstract request interfaces (`UpdateReq { resource, fieldMask }`). On the HTTP wire:
+
+| Operation | HTTP Verb & URL | Query Parameters | JSON Body |
+| :--- | :--- | :--- | :--- |
+| **Get** | `GET /v1/chatRooms/{id}` | `?fieldMask=a&fieldMask=b` | *(none)* |
+| **List** | `GET /v1/chatRooms` | `?maxPageSize=50&pageToken=...&filter=...&includeDeleted=true` | *(none)* |
+| **Create** | `POST /v1/chatRooms` | `?validateOnly=true` *(or header `Idempotency-Key`)* | Resource JSON |
+| **Update** | `PATCH /v1/chatRooms/{id}` | `?fieldMask=title&fieldMask=settings.theme` | **Bare partial resource** (`{"title":"New"}`) |
+| **Delete** | `DELETE /v1/chatRooms/{id}` | *(none)* | *(none)* |
+| **Custom / Batch** | `POST /v1/chatRooms/{id}:send` or `POST /v1/chatRooms:batchUpdate` | *(read-only `:wait`/`:read`/`:batchGet` use `GET`)* | Action payload (`{ destinationParent }`, `{ requests, fieldMask }`) |
+
+```http
+❌ BAD: PATCH /v1/chatRooms/1   { "resource": { "title": "New" }, "fieldMask": ["title"] }
+✅ GOOD: PATCH /v1/chatRooms/1?fieldMask=title   { "title": "New" }
+```
+
+---
+
+## 4. Non-Obvious Book Guardrails
+
+- **Standard `DELETE` is NOT idempotent:** `204`/`200` on first delete, `404` on repeat (hard delete) or `412 Precondition Failed` (soft delete returning the updated resource).
+- **No covert side effects:** Never send emails or trigger jobs via `PATCH { status: "sent" }`; use `POST /emails/{id}:send`.
+- **Pagination stops ONLY on empty `nextPageToken`:** Use `maxPageSize` (upper bound, never `pageSize`). Keep paging even if `results` is `[]` while `nextPageToken` is present.
+- **No precision-unsafe JSON numbers:** Serialize 64-bit IDs/ints and money/decimals as **strings** (or `{ currencyCode, units, nanos }`).
+- **Open strings over closed enums:** Document allowed string values and validate server-side instead of rigid schema enums.
+- **Atomic lists; no index addressing:** Never support `items[0]` in `FieldMask` or `filter`.
+- **100% atomic `:batch*`:** All items succeed or roll back together in exact input order; use an LRO or `:import` for partial-failure jobs.
+- **Safe `:purge`:** `force` defaults to `false` (dry-run preview returning `purgeCount` + `purgeSample`).
+
+---
+
+## 5. Workflows, Output Contracts & Tooling
+
+### Design Deliverable
+When designing an API from requirements:
+1. State **Greenfield vs. Brownfield** assumptions and target resource hierarchy (≤ 2–3 levels).
+2. Output concrete **endpoints table** (HTTP verb, path, request/response schemas, key status codes) + TypeScript/OpenAPI definitions.
+3. Explicitly note applied safety patterns (`requestId`/`Idempotency-Key`, pagination, soft delete, LROs).
+
+### Audit / Review Deliverable
+When reviewing a spec or route code:
+1. Run `lint-openapi` (below) first if an OpenAPI JSON/YAML file is present.
+2. Group findings by severity: **`[CRITICAL]`** (data loss/security/breaking) → **`[MAJOR]`** (structural/operational defects) → **`[MINOR]`** (naming/polish).
+3. For every finding include: **Pattern & Chapter**, **`❌ Current` → `✅ Recommended Fix`**, and **Failure Mode**.
+
+### Executable Helper (`scripts/api_patterns_tool.py`)
+Use [api_patterns_tool.py](./scripts/api_patterns_tool.py) instead of computing Base32 checksums manually or auditing large OpenAPI files purely by eye:
+```bash
+# Generate / verify Ch 6 Crockford Base32 + Base37 checksum IDs
+python3 scripts/api_patterns_tool.py id-gen --prefix books --bytes 8 --count 3
+python3 scripts/api_patterns_tool.py id-verify "books/ahm6-a83h-enmp~"
+
+# Run automated OpenAPI anti-pattern checks (JSON, or YAML if PyYAML installed)
+python3 scripts/api_patterns_tool.py lint-openapi path/to/openapi.json
+```

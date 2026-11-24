@@ -16,13 +16,14 @@ Easy to use · Unique · Permanent (never reused, even after deletion) · Fast/e
    - **Why:** Distinguishes `400 Bad Request` (invalid checksum — ID could never exist, e.g., user typo) from `404 Not Found` (valid checksum — deleted or never created).
    - Store only raw bytes / integer / Base32 core in the DB; **compute and strip the checksum dynamically** at the API boundary.
 4. **Sizing:**
-   - Per-resource-type uniqueness: 60 bits (12 Base32 chars) + 1 checksum = **13 chars**.
-   - Global uniqueness (or UUID v4 encoded in Crockford Base32): 120–128 bits (24–26 Base32 chars) + 1 checksum = **25–27 chars** (more compact and shareable than 36-char hex UUIDs).
+   - Per-resource-type uniqueness: 8 bytes / 64 bits (13 Base32 chars) + 1 checksum = **14 chars** (or 60 bits = 12 + 1 = **13 chars**).
+   - Global uniqueness (or UUID v4 encoded in Crockford Base32): 15–16 bytes / 120–128 bits (24–26 Base32 chars) + 1 checksum = **25–27 chars** (more compact and shareable than 36-char hex UUIDs).
 5. **Resource Type & Hierarchy in `id`:**
    - Prefix with plural collection path: `"books/ahm6a83henmp~"` or `"books/1234/pages/5678"`.
    - Child IDs only need uniqueness within their parent (`books/1/pages/2` and `books/9/pages/2` are distinct full IDs).
    - Only nest when ownership is permanent (pages never move books; books *do* move shelves, so use `shelfId`, not `shelves/1/books/1`).
 6. **Server-Generated & Tombstoned:** Never let users invent random IDs unless strictly necessary (causes PII leaks in IDs and collision confusion). Never reuse deleted IDs—keep tombstones (via soft delete, ID table, or Bloom filter) or use ≥ 120-bit CSPRNG IDs.
+7. **Tooling:** When generating test fixtures or validating checksummed IDs, run `python3 scripts/api_patterns_tool.py id-gen` and `id-verify` rather than guessing checksum characters.
 
 ---
 
@@ -55,10 +56,21 @@ interface GetChatRoomRequest { id: string; fieldMask?: FieldMask; }
 interface UpdateChatRoomRequest { resource: ChatRoom; fieldMask?: FieldMask; }
 ```
 
-### Transport
-- Use **repeated query parameters** on both `GET` and `PATCH`:
-  `GET /chatRooms/1?fieldMask=title&fieldMask=loggingConfig.maxSizeMb`
-  `PATCH /chatRooms/1?fieldMask=title` with body `{ "title": "New" }` (never wrap `{ resource, fieldMask }` in the `PATCH` body—the `PATCH` body must remain the resource itself).
+### Transport & HTTP Wire Mapping
+- Use **repeated query parameters** on both `GET` and `PATCH`; keep the `PATCH` JSON body as the bare resource object:
+```http
+❌ BAD:
+PATCH /chatRooms/1 HTTP/1.1
+{ "resource": { "title": "New" }, "fieldMask": ["title"] }
+
+✅ GOOD (update specific field):
+PATCH /chatRooms/1?fieldMask=title&fieldMask=loggingConfig.maxSizeMb HTTP/1.1
+{ "title": "New", "loggingConfig": { "maxSizeMb": 20 } }
+
+✅ GOOD (delete dynamic map key `settings.test` via explicit mask + omitted body key):
+PATCH /chatRooms/1?fieldMask=settings.test HTTP/1.1
+{}
+```
 
 ### Path Syntax Rules
 1. Dot `.` separates nested fields: `"loggingConfig.maxSizeMb"`.
@@ -72,8 +84,7 @@ interface UpdateChatRoomRequest { resource: ChatRoom; fieldMask?: FieldMask; }
 - **`PATCH` default (unset `fieldMask`) — Implicit Field Mask:** Infer the mask recursively from every present non-`undefined` key in the JSON body:
   - Missing key → untouched.
   - Explicit `null` → sets field to `null`.
-- **Removing a key from a dynamic map (`undefined` in JSON):** Since JSON cannot represent `undefined`, pass an **explicit `fieldMask`** naming the key while **omitting that key** from the `PATCH` body:
-  `PATCH /chatRooms/1?fieldMask=settings.test` with `{}` → deletes `settings["test"]`.
+- **Removing a key from a dynamic map (`undefined` in JSON):** Since JSON cannot represent `undefined`, pass an **explicit `fieldMask`** naming the key while **omitting that key** from the `PATCH` body (shown above).
 - **Unknown/invalid fields in `fieldMask`:** Treat as `undefined` (do not throw errors), preserving forward/backward compatibility as fields are added or removed.
 
 ---
@@ -153,4 +164,6 @@ GetAnalyzeChatRoomExecution(req: GetExecutionRequest): AnalyzeChatRoomJobExecuti
 ## Industry Supplements (>90% Confidence)
 
 - **HTTP Status Codes (RFC 9110):** Use `201 Created` (with `Location` header) or `200 OK` on `Create`; `202 Accepted` when returning an asynchronous `Operation`; `204 No Content` on `void` `Delete`.
+- **Optimistic Concurrency (`etag` / `If-Match`):** For resources prone to concurrent `PATCH`/`PUT` races, include an `etag` field / `ETag` response header and honor `If-Match` on `PATCH`/`PUT`/`DELETE`, returning `412 Precondition Failed` on mismatch to prevent lost updates.
 - **Standard Error Envelope (RFC 9457 / Google AIP-193):** Return structured JSON errors (`{ error: { code, message, details } }` or RFC 9457 `application/problem+json` with `type`, `title`, `status`, `detail`) consistently across `4xx`/`5xx` and `OperationError`.
+- **Framework Colon-Routing Caveat:** In routers where `:` denotes path parameters (Express `path-to-regexp` uses `/chatRooms/:id`, FastAPI uses `/chatRooms/{id}:send`), match `:action` via explicit route ordering, escaped colons (`\\:send`), or regex route matching—and define custom action paths explicitly in OpenAPI (`paths["/chatRooms/{id}:send"]`).

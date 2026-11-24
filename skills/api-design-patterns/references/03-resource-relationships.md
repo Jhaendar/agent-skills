@@ -15,6 +15,18 @@ Covers singleton sub-resources, cross-references, many-to-many modeling, and pol
 | M:N relationship **without metadata** (simple set membership) | **Add/Remove Custom Methods** | Ch 15 |
 | Heterogeneous items listed/stored in one unified collection | **Polymorphic Resource** | Ch 16 |
 
+```ts
+// ❌ BAD: Ambiguous bare ID field, unbounded M:N array, wrong singleton verb
+interface BookBad { id: string; author: string; }                 // Is `author` an ID or name?
+interface GroupBad { id: string; userIds: string[]; }             // Unbounded array; write conflicts
+// POST /drivers/123/location                                     // Singletons cannot be Created
+
+// ✅ GOOD: Explicit `*Id` suffix, separate Membership resource, PATCH on singleton
+interface BookGood { id: string; authorId: string; }              // "authors/xyz789~"
+interface MembershipGood { id: string; groupId: string; userId: string; role: string; }
+// PATCH /drivers/123/location  (or POST /drivers/123/location:reset)
+```
+
 ---
 
 ## Chapter 12: Singleton Sub-Resources
