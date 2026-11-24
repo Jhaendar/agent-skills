@@ -1,4 +1,4 @@
-# Book Skills
+# Agent Skills
 
 A curated collection of modular agent skills distilled from foundational software engineering books, structured for **Google Antigravity** and compatible `SKILL.md`-based AI coding agents.
 
@@ -13,7 +13,7 @@ Each skill compresses a book's mental models, opinionated rules, schema conventi
 ## Repository Structure
 
 ```text
-book-skills/
+agent-skills/
 ├── .gitignore
 ├── .agents/
 │   └── skills.json                      # Enables workspace-local discovery in Antigravity
@@ -51,13 +51,13 @@ Add this repository's `skills` directory to `~/.gemini/config/skills.json`:
 {
   "entries": [
     {
-      "path": "/Users/jhaendar/Obsidian/TEST /book-skills/skills"
+      "path": "/Users/jhaendar/Obsidian/TEST /agent-skills/skills"
     }
   ]
 }
 ```
 
-> **Note:** If you move this repository (for example, to `~/Projects/book-skills`), update the `path` value in `~/.gemini/config/skills.json` accordingly.
+> **Note:** If you move this repository (for example, to `~/Projects/agent-skills`), update the `path` value in `~/.gemini/config/skills.json` accordingly.
 
 ### Option 2: Project-Local
 
@@ -67,7 +67,7 @@ In any repository, create `.agents/skills.json` pointing to this repo's `skills`
 {
   "entries": [
     {
-      "path": "/Users/jhaendar/Obsidian/TEST /book-skills/skills"
+      "path": "/Users/jhaendar/Obsidian/TEST /agent-skills/skills"
     }
   ]
 }
